@@ -1,0 +1,13 @@
+📌 IMPORTANTE: Salve o ícone personalizado nesta pasta!
+
+Nome do arquivo: icon.png
+Formato: PNG
+Tamanho recomendado: 1024x1024px (mínimo 512x512px)
+
+Após adicionar:
+1. Pare o aplicativo (se estiver rodando)
+2. Execute: npm run clean
+3. Execute: npm run build
+4. Execute: npm run dev
+
+O ícone aparecerá automaticamente!
