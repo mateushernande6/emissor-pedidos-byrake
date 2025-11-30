@@ -502,22 +502,34 @@ const App: React.FC = () => {
                   </div>
                   <div className="form-group">
                     <label>Impressora</label>
-                    <select
-                      value={newStation.printer || ""}
-                      onChange={(e) =>
-                        setNewStation({
-                          ...newStation,
-                          printer: e.target.value,
-                        })
-                      }
-                    >
-                      <option value="">Selecione uma impressora</option>
-                      {printers.map((printer) => (
-                        <option key={printer.name} value={printer.name}>
-                          {printer.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <select
+                        value={newStation.printer || ""}
+                        onChange={(e) =>
+                          setNewStation({
+                            ...newStation,
+                            printer: e.target.value,
+                          })
+                        }
+                        style={{ flex: 1 }}
+                      >
+                        <option value="">Selecione uma impressora</option>
+                        {printers.map((printer) => (
+                          <option key={printer.name} value={printer.name}>
+                            {printer.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleRefreshPrinters}
+                        className="btn btn-secondary"
+                        style={{ padding: "0.5rem 1rem" }}
+                        title="Atualizar lista de impressoras"
+                      >
+                        🔄
+                      </button>
+                    </div>
                   </div>
                   <div className="form-group">
                     <label>Categorias</label>

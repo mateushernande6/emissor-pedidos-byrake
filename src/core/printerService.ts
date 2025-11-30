@@ -185,37 +185,58 @@ export class PrinterService {
             return;
           }
 
-          isPrinting = true;
-          clearTimeout(timeoutId);
-
-          printWindow.webContents.print(
-            {
-              silent: true,
-              printBackground: false,
-              deviceName: printerName,
-              margins: {
-                marginType: "custom",
-                top: 10,
-                bottom: 10,
-                left: 10,
-                right: 10,
-              },
-            },
-            (success, errorType) => {
-              if (!success) {
-                console.error("Erro ao imprimir:", errorType);
-                finalize(
-                  new Error(
-                    `Falha ao imprimir: ${errorType || "Erro desconhecido"}`
-                  )
-                );
-                return;
-              }
-
-              console.log(`Impressão enviada com sucesso para ${printerName}`);
-              finalize();
+          // CRÍTICO: No Windows, aguardar 500ms antes de imprimir
+          // para garantir que o renderizador esteja completamente pronto
+          setTimeout(() => {
+            if (isPrinting || !printWindow || printWindow.isDestroyed()) {
+              return;
             }
-          );
+
+            isPrinting = true;
+            clearTimeout(timeoutId);
+
+            printWindow.webContents.print(
+              {
+                silent: true,
+                printBackground: false,
+                deviceName: printerName,
+                margins: {
+                  marginType: "custom",
+                  top: 10,
+                  bottom: 10,
+                  left: 10,
+                  right: 10,
+                },
+              },
+              (success, errorType) => {
+                if (!success) {
+                  console.error("Erro ao imprimir:", errorType);
+                  finalize(
+                    new Error(
+                      `Falha ao imprimir: ${errorType || "Erro desconhecido"}`
+                    )
+                  );
+                  return;
+                }
+
+                console.log(
+                  `Impressão enviada com sucesso para ${printerName}`
+                );
+
+                // CRÍTICO: No Windows, o callback retorna ANTES que o job
+                // seja realmente processado pela fila da impressora.
+                // Manter a janela aberta por 2 segundos para garantir que
+                // o Windows processe completamente o job de impressão.
+                console.log(
+                  "[PRINT] Aguardando 2s para Windows processar job..."
+                );
+                setTimeout(() => {
+                  console.log("[PRINT] Delay concluído, finalizando.");
+                  finalize();
+                }, 2000); // 2 segundos críticos para Windows processar
+              }
+            );
+          }, 500); // 500ms de delay crítico para Windows
         });
 
         printWindow.on("closed", () => {

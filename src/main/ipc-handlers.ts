@@ -278,16 +278,62 @@ export class IPCHandlers {
       "jobs:reprint",
       async (_event, jobId: string, payload: string) => {
         try {
+          console.log("[IPC] jobs:reprint chamado", { jobId });
           const config = this.configStore.get();
-          if (config.stationToken && config.selectedPrinter) {
+
+          // Busca impressora configurada
+          let printerName = config.selectedPrinter;
+
+          console.log("[IPC] Config:", {
+            stationToken: config.stationToken ? "exists" : "missing",
+            selectedPrinter: printerName,
+          });
+
+          // Se não tem impressora na config, tenta buscar de printClient conectado
+          if (!printerName && config.stationToken) {
             const printClient = this.printClients.get(config.stationToken);
             if (printClient) {
-              await printClient.reprintJob(payload);
-              return { success: true };
+              const station = printClient.getStation();
+              printerName = station?.default_printer_name;
+              console.log(
+                "[IPC] Usando impressora da estação conectada:",
+                printerName
+              );
             }
           }
-          throw new Error("Estação não conectada");
+
+          // Se ainda não tem impressora, usa a padrão do sistema
+          if (!printerName) {
+            const defaultPrinter =
+              await this.printerService.getDefaultPrinter();
+            printerName = defaultPrinter || undefined;
+            console.log(
+              "[IPC] Usando impressora padrão do sistema:",
+              printerName
+            );
+          }
+
+          if (!printerName) {
+            console.error("[IPC] ❌ Nenhuma impressora disponível!");
+            throw new Error(
+              "Nenhuma impressora configurada. Configure uma impressora antes de reimprimir."
+            );
+          }
+
+          console.log(`[IPC] Reimprimindo para impressora: ${printerName}`);
+
+          // Usa printerService diretamente (não depende de printClient)
+          await this.printerService.print(printerName, payload);
+
+          this.logService.success(
+            `Job ${jobId.substring(0, 8)} reimpresso com sucesso`
+          );
+          console.log("[IPC] ✓ Reimpressão concluída");
+
+          return { success: true };
         } catch (error: any) {
+          console.error("[IPC] ❌ Erro ao reimprimir:", error);
+          this.logService.error(`Erro ao reimprimir: ${error.message}`);
           throw new Error(error.message);
         }
       }

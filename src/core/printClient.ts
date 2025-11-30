@@ -113,17 +113,51 @@ export class PrintClient {
   private shouldProcessJob(job: PrintJob): boolean {
     // Se não há filtro local, processa tudo
     if (this.localCategories.length === 0) {
+      this.logger.info(
+        `[FILTRO] Sem filtro local - ACEITA job ${job.id.substring(0, 8)}`
+      );
+      return true;
+    }
+
+    // Se o filtro contém "Todas", processa tudo
+    if (this.localCategories.includes("Todas")) {
+      this.logger.info(
+        `[FILTRO] Categoria "Todas" - ACEITA job ${job.id.substring(0, 8)}`
+      );
       return true;
     }
 
     // Se o job não tem categorias, processa (retrocompatibilidade)
     const jobCategories = job.item_categories || [];
     if (jobCategories.length === 0) {
+      this.logger.info(
+        `[FILTRO] Job sem categorias - ACEITA ${job.id.substring(0, 8)}`
+      );
       return true;
     }
 
     // Verifica se há interseção entre categorias do job e filtro local
-    return jobCategories.some((cat) => this.localCategories.includes(cat));
+    const shouldProcess = jobCategories.some((cat) =>
+      this.localCategories.includes(cat)
+    );
+
+    if (shouldProcess) {
+      this.logger.info(
+        `[FILTRO] Match encontrado - ACEITA job ${job.id.substring(0, 8)}`
+      );
+    } else {
+      this.logger.info(
+        `[FILTRO] Sem match - REJEITA job ${job.id.substring(0, 8)}`
+      );
+      this.logger.info(
+        `[FILTRO] Job categorias: [${jobCategories.join(", ")}]`
+      );
+      this.logger.info(
+        `[FILTRO] Filtro local: [${this.localCategories.join(", ")}]`
+      );
+    }
+
+    return shouldProcess;
   }
 
   /**
@@ -172,11 +206,18 @@ export class PrintClient {
       (job: PrintJob) => {
         // Aplica filtro local antes de adicionar à fila
         if (this.shouldProcessJob(job)) {
-          this.logger.info(`Novo job recebido via Realtime: ${job.id}`);
+          this.logger.info(
+            `🔔 Novo job recebido via Realtime: ${job.id.substring(0, 8)}`
+          );
           this.processingQueue.push(job);
+          this.logger.info(
+            `Adicionado à fila. Total na fila: ${this.processingQueue.length}`
+          );
           this.processQueue();
         } else {
-          this.logger.info(`Job ${job.id} ignorado (filtro local)`);
+          this.logger.info(
+            `Job ${job.id.substring(0, 8)} ignorado (filtro local)`
+          );
         }
       }
     );
@@ -227,7 +268,7 @@ export class PrintClient {
 
         if (newJobs.length > 0) {
           this.logger.info(
-            `${newJobs.length} novo(s) job(s) encontrado(s) via polling`
+            `🔍 ${newJobs.length} novo(s) job(s) encontrado(s) via polling`
           );
 
           newJobs.forEach((job) => {
@@ -236,7 +277,14 @@ export class PrintClient {
               (qJob) => qJob.id === job.id
             );
             if (!alreadyInQueue) {
+              this.logger.info(
+                `Adicionando job ${job.id.substring(0, 8)} à fila`
+              );
               this.processingQueue.push(job);
+            } else {
+              this.logger.info(
+                `Job ${job.id.substring(0, 8)} já está na fila, ignorando`
+              );
             }
           });
 
@@ -264,10 +312,20 @@ export class PrintClient {
    * Processa a fila de jobs
    */
   private async processQueue(): Promise<void> {
-    if (this.isProcessing || this.processingQueue.length === 0) {
+    if (this.isProcessing) {
+      this.logger.info(
+        "Fila de impressão já está sendo processada, aguardando..."
+      );
       return;
     }
 
+    if (this.processingQueue.length === 0) {
+      return;
+    }
+
+    this.logger.info(
+      `Iniciando processamento da fila (${this.processingQueue.length} job(s) pendente(s))`
+    );
     this.isProcessing = true;
 
     while (this.processingQueue.length > 0) {
@@ -278,6 +336,7 @@ export class PrintClient {
     }
 
     this.isProcessing = false;
+    this.logger.info("Fila de impressão processada completamente");
   }
 
   /**
@@ -285,9 +344,14 @@ export class PrintClient {
    */
   private async processJob(job: PrintJob): Promise<void> {
     try {
-      this.logger.info(`Processando job ${job.id}...`);
+      this.logger.info(
+        `➡️ Processando job ${job.id.substring(0, 8)}... (Estação: ${
+          this.station?.name
+        })`
+      );
 
       // Atualiza status para "printing"
+      this.logger.info("Atualizando status para 'printing'...");
       await this.supabase.updateJobToPrinting(job.id);
 
       // Obtém impressora configurada
@@ -296,15 +360,25 @@ export class PrintClient {
         throw new Error("Nenhuma impressora configurada");
       }
 
+      this.logger.info(`Impressora selecionada: ${printerName}`);
+
       // Envia para impressão
+      this.logger.info(
+        `🖨️ Enviando para impressão (${job.payload.length} caracteres)...`
+      );
       await this.printer.print(printerName, job.payload);
 
       // Atualiza status para "printed"
+      this.logger.info("Atualizando status para 'printed'...");
       await this.supabase.updateJobToPrinted(job.id);
 
-      this.logger.success(`Job ${job.id} impresso com sucesso`);
+      this.logger.success(
+        `✅ Job ${job.id.substring(0, 8)} impresso com sucesso!`
+      );
     } catch (error: any) {
-      this.logger.error(`Erro ao processar job ${job.id}: ${error.message}`);
+      this.logger.error(
+        `❌ Erro ao processar job ${job.id.substring(0, 8)}: ${error.message}`
+      );
 
       try {
         await this.supabase.updateJobToError(job.id, error.message);
