@@ -68,6 +68,14 @@ const App: React.FC = () => {
 
   // Carrega configuração ao iniciar
   useEffect(() => {
+    if (!window.electronAPI) {
+      setMessage({
+        type: "error",
+        text: "electronAPI indisponível (preload não carregou). Rode o app via Electron (yarn dev) e verifique erros no processo main/preload.",
+      });
+      return;
+    }
+
     loadConfig();
     loadPrinters();
     loadConnectionStatus();
@@ -92,6 +100,7 @@ const App: React.FC = () => {
 
   const loadConfig = async () => {
     try {
+      if (!window.electronAPI) return;
       const cfg = await window.electronAPI.config.get();
       setConfig(cfg);
       setStationToken(cfg.stationToken || "");
@@ -114,6 +123,7 @@ const App: React.FC = () => {
 
   const loadPrinters = async () => {
     try {
+      if (!window.electronAPI) return;
       const printerList = await window.electronAPI.printer.list();
       setPrinters(printerList);
     } catch (error: any) {
@@ -123,6 +133,7 @@ const App: React.FC = () => {
 
   const loadConnectionStatus = async () => {
     try {
+      if (!window.electronAPI) return;
       const status = await window.electronAPI.connection.getStatus();
       setConnectionStatus(status);
     } catch (error: any) {

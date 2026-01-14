@@ -8,6 +8,7 @@ export class PrintClient {
   private printer: PrinterService;
   private logger: LogService;
   private station: PrintStation | null = null;
+  private stationDisplayName: string | null = null;
   private localCategories: string[] = []; // Categorias locais da CONEXÃO (não persistem no banco)
   private unsubscribe: (() => void) | null = null;
   private isProcessing = false;
@@ -366,7 +367,8 @@ export class PrintClient {
       this.logger.info(
         `🖨️ Enviando para impressão (${job.payload.length} caracteres)...`
       );
-      await this.printer.print(printerName, job.payload);
+      const payloadToPrint = this.applyStationNameOverride(job.payload);
+      await this.printer.print(printerName, payloadToPrint);
 
       // Atualiza status para "printed"
       this.logger.info("Atualizando status para 'printed'...");
@@ -547,6 +549,33 @@ export class PrintClient {
    */
   getStation(): PrintStation | null {
     return this.station;
+  }
+
+  setStationDisplayName(name: string | null): void {
+    this.stationDisplayName = name;
+  }
+
+  private applyStationNameOverride(payload: string): string {
+    if (!this.stationDisplayName) return payload;
+
+    const stationLineRegex = /^ESTAÇAO\s*:\s*.*$/gim;
+    const stationLineRegexAccented = /^ESTAÇÃO\s*:\s*.*$/gim;
+
+    if (stationLineRegexAccented.test(payload)) {
+      return payload.replace(
+        stationLineRegexAccented,
+        `ESTAÇÃO: ${this.stationDisplayName}`
+      );
+    }
+
+    if (stationLineRegex.test(payload)) {
+      return payload.replace(
+        stationLineRegex,
+        `ESTACAO: ${this.stationDisplayName}`
+      );
+    }
+
+    return payload;
   }
 
   /**

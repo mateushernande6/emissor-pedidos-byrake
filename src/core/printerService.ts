@@ -23,7 +23,7 @@ export class PrinterService {
     }
   }
 
-  private sanitizeForPrinter(content: string): string {
+  private sanitizeForRawPrinter(content: string): string {
     const withoutDiacritics = content
       .normalize("NFKD")
       .replace(/[\u0300-\u036f]/g, "");
@@ -33,15 +33,19 @@ export class PrinterService {
       ""
     );
 
-    // Adiciona linhas em branco no final para facilitar o corte
-    const feedLines = "\n\n\n\n\n\n\n\n"; // 8 linhas em branco
-
-    // Comando ESC/POS para corte automático do papel
-    // \x1D\x56\x01 = GS V 1 (corte parcial - deixa uma pequena parte ligada)
-    // \x1D\x56\x00 = GS V 0 (corte total)
-    const cutCommand = "\x1D\x56\x01"; // Corte parcial
-
+    const feedLines = "\n\n\n\n\n\n\n\n";
+    const cutCommand = "\x1D\x56\x01";
     return sanitized + feedLines + cutCommand;
+  }
+
+  private sanitizeForBrowserPrint(content: string): string {
+    const withoutDiacritics = content
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    // Para impressão via Chromium/GDI (Windows), NÃO enviar bytes ESC/POS.
+    // Mantém apenas TAB/LF/CR e caracteres imprimíveis.
+    return withoutDiacritics.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
   }
 
   /**
@@ -62,14 +66,106 @@ export class PrinterService {
    * Envia um texto simples para impressão usando Electron API
    */
   async print(printerName: string, content: string): Promise<void> {
-    const sanitizedContent = this.sanitizeForPrinter(content);
-
     if (process.platform === "win32") {
-      return this.printWithBrowserWindow(printerName, sanitizedContent);
+      const browserContent = this.sanitizeForBrowserPrint(content);
+      try {
+        return await this.printWithPowerShell(printerName, browserContent);
+      } catch (error) {
+        console.error(
+          "[PRINT] Falha no PowerShell print, tentando fallback via BrowserWindow...",
+          error
+        );
+        return this.printWithBrowserWindow(printerName, browserContent);
+      }
     }
 
+    const rawContent = this.sanitizeForRawPrinter(content);
+
     // Em sistemas baseados em Unix (macOS/Linux), usa o comando lp para enviar texto puro
-    return this.printWithLp(printerName, sanitizedContent);
+    return this.printWithLp(printerName, rawContent);
+  }
+
+  private printWithPowerShell(
+    printerName: string,
+    content: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Evita problemas de quoting passando o texto em Base64
+      const b64 = Buffer.from(content, "utf8").toString("base64");
+
+      // Imprime texto usando .NET (GDI). É mais confiável no Windows do que
+      // webContents.print para impressoras térmicas/ESC-POS.
+      const psScript = [
+        "$ErrorActionPreference = 'Stop'",
+        `$printerName = ${JSON.stringify(printerName)}`,
+        `$text = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(${JSON.stringify(
+          b64
+        )}))`,
+        "",
+        "Add-Type -AssemblyName System.Drawing",
+        "",
+        "$doc = New-Object System.Drawing.Printing.PrintDocument",
+        "$doc.PrinterSettings.PrinterName = $printerName",
+        "",
+        "if (-not $doc.PrinterSettings.IsValid) {",
+        '  throw "Impressora inválida ou não encontrada: $printerName"',
+        "}",
+        "",
+        "$font = New-Object System.Drawing.Font('Consolas', 9)",
+        '$lines = $text -split "`n"',
+        "$lineIndex = 0",
+        "",
+        "$doc.add_PrintPage({",
+        "  param($sender, $e)",
+        "  $x = 5",
+        "  $y = 5",
+        "  $lineHeight = $font.GetHeight($e.Graphics)",
+        "  $maxY = $e.MarginBounds.Bottom",
+        "  while ($lineIndex -lt $lines.Length) {",
+        "    $line = $lines[$lineIndex]",
+        "    $e.Graphics.DrawString($line, $font, [System.Drawing.Brushes]::Black, $x, $y)",
+        "    $y += $lineHeight",
+        "    $lineIndex++",
+        "    if ($y + $lineHeight -gt $maxY) {",
+        "      $e.HasMorePages = $true",
+        "      return",
+        "    }",
+        "  }",
+        "  $e.HasMorePages = $false",
+        "})",
+        "",
+        "$doc.Print()",
+      ].join("\r\n");
+
+      const ps = spawn(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript],
+        { windowsHide: true }
+      );
+
+      let stderr = "";
+      ps.stderr.on("data", (d) => {
+        stderr += d.toString();
+      });
+
+      ps.on("error", (err) => {
+        reject(new Error(`Falha ao executar PowerShell: ${err.message}`));
+      });
+
+      ps.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `PowerShell retornou código ${code}: ${
+                stderr.trim() || "Erro desconhecido"
+              }`
+            )
+          );
+        }
+      });
+    });
   }
 
   private printWithLp(printerName: string, content: string): Promise<void> {
@@ -141,21 +237,25 @@ export class PrinterService {
             <meta charset="UTF-8">
             <style>
               @page {
-                margin: 10mm;
+                margin: 0;
               }
               body {
                 font-family: 'Courier New', monospace;
                 font-size: 12px;
                 margin: 0;
+                padding: 0;
+              }
+              pre {
+                margin: 0;
                 padding: 10px;
-                white-space: pre-wrap;
+                white-space: pre;
               }
             </style>
           </head>
-          <body>${content
+          <body><pre>${content
+            .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/\n/g, "<br>")}</body>
+            .replace(/>/g, "&gt;")}</pre></body>
           </html>
         `;
 

@@ -64,9 +64,16 @@ export class IPCHandlers {
           const config = this.configStore.get();
           let stationName = "Estação Local (Teste)";
           if (config.stationToken) {
-            const printClient = this.printClients.get(config.stationToken);
-            const station = printClient?.getStation();
-            stationName = station?.name || stationName;
+            const localStation = config.stations?.find(
+              (s) => s.token === config.stationToken
+            );
+            if (localStation?.name) {
+              stationName = localStation.name;
+            } else {
+              const printClient = this.printClients.get(config.stationToken);
+              const station = printClient?.getStation();
+              stationName = station?.name || stationName;
+            }
           }
           await this.printerService.testPrint(printerName, stationName);
           this.logService.success(
@@ -136,6 +143,11 @@ export class IPCHandlers {
             this.logService
           );
 
+          const localStation = config.stations?.find(
+            (s) => s.token === config.stationToken
+          );
+          printClient.setStationDisplayName(localStation?.name || null);
+
           // Configura status forwarding para este cliente
           printClient.onStatusChange((status: ConnectionStatus) => {
             const windows = BrowserWindow.getAllWindows();
@@ -151,6 +163,12 @@ export class IPCHandlers {
           );
 
           this.printClients.set(config.stationToken, printClient);
+        } else {
+          const existingClient = this.printClients.get(config.stationToken);
+          const localStation = config.stations?.find(
+            (s) => s.token === config.stationToken
+          );
+          existingClient?.setStationDisplayName(localStation?.name || null);
         }
 
         return { success: true };
@@ -321,6 +339,21 @@ export class IPCHandlers {
           }
 
           console.log(`[IPC] Reimprimindo para impressora: ${printerName}`);
+
+          // Se existir nome amigável local da estação atual, sobrescreve a linha ESTAÇÃO no ticket
+          const localStation = config.stationToken
+            ? config.stations?.find((s) => s.token === config.stationToken)
+            : undefined;
+          if (localStation?.name) {
+            payload = payload.replace(
+              /^ESTAÇÃO\s*:\s*.*$/gim,
+              `ESTAÇÃO: ${localStation.name}`
+            );
+            payload = payload.replace(
+              /^ESTAÇAO\s*:\s*.*$/gim,
+              `ESTACAO: ${localStation.name}`
+            );
+          }
 
           // Usa printerService diretamente (não depende de printClient)
           await this.printerService.print(printerName, payload);
