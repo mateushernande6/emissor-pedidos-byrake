@@ -7,6 +7,12 @@ import { PrintClient } from "../core/printClient";
 import { AppConfig, LogEntry, ConnectionStatus } from "../core/types";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../core/runtimeEnv";
 
+function getSupabaseCredentials(): { url: string; key: string } {
+  const url = (process.env.SUPABASE_URL || SUPABASE_URL || "").trim();
+  const key = (process.env.SUPABASE_ANON_KEY || SUPABASE_ANON_KEY || "").trim();
+  return { url, key };
+}
+
 export class IPCHandlers {
   private configStore: ConfigStore;
   private printerService: PrinterService;
@@ -38,9 +44,15 @@ export class IPCHandlers {
       (_event: IpcMainInvokeEvent, config: Partial<AppConfig>) => {
         // Apenas salva token da estação e impressora selecionada
         // URL e chave do Supabase vêm do .env
-        this.configStore.set(config);
+        const normalized: Partial<AppConfig> = { ...config };
+        if (typeof normalized.stationToken === "string") {
+          normalized.stationToken = normalized.stationToken
+            .trim()
+            .toUpperCase();
+        }
+        this.configStore.set(normalized);
         return { success: true };
-      }
+      },
     );
 
     ipcMain.handle("config:isConfigured", () => {
@@ -65,7 +77,7 @@ export class IPCHandlers {
           let stationName = "Estação Local (Teste)";
           if (config.stationToken) {
             const localStation = config.stations?.find(
-              (s) => s.token === config.stationToken
+              (s) => s.token === config.stationToken,
             );
             if (localStation?.name) {
               stationName = localStation.name;
@@ -77,14 +89,14 @@ export class IPCHandlers {
           }
           await this.printerService.testPrint(printerName, stationName);
           this.logService.success(
-            `Teste de impressão enviado para: ${printerName}`
+            `Teste de impressão enviado para: ${printerName}`,
           );
           return { success: true };
         } catch (error: any) {
           this.logService.error(`Erro no teste de impressão: ${error.message}`);
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     ipcMain.handle(
@@ -107,7 +119,7 @@ export class IPCHandlers {
         } catch (error: any) {
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     // Conexão
@@ -116,35 +128,37 @@ export class IPCHandlers {
         const config = this.configStore.get();
 
         // Lê credenciais do Supabase das variáveis de ambiente
-        // const supabaseUrl = process.env.SUPABASE_URL;
-        // const supabaseKey = process.env.SUPABASE_ANON_KEY;
-        const supabaseUrl = SUPABASE_URL;
-        const supabaseKey = SUPABASE_ANON_KEY;
+        const { url: supabaseUrl, key: supabaseKey } = getSupabaseCredentials();
 
         if (!supabaseUrl || !supabaseKey) {
           throw new Error(
-            "Configuração do Supabase não encontrada. Verifique o arquivo .env"
+            "Configuração do Supabase não encontrada. Verifique o arquivo .env",
           );
         }
 
-        if (!config.stationToken) {
+        const stationToken = (config.stationToken || "").trim().toUpperCase();
+        if (!stationToken) {
           throw new Error(
-            "Token da estação não configurado. Preencha o campo de token."
+            "Token da estação não configurado. Preencha o campo de token.",
           );
+        }
+
+        if (stationToken !== config.stationToken) {
+          this.configStore.set({ stationToken });
         }
 
         // Verifica se já existe um cliente para este token
-        if (!this.printClients.has(config.stationToken)) {
+        if (!this.printClients.has(stationToken)) {
           // Cria nova instância para esta estação
           const supabaseService = new SupabaseService();
           const printClient = new PrintClient(
             supabaseService,
             this.printerService,
-            this.logService
+            this.logService,
           );
 
           const localStation = config.stations?.find(
-            (s) => s.token === config.stationToken
+            (s) => s.token === config.stationToken,
           );
           printClient.setStationDisplayName(localStation?.name || null);
 
@@ -156,17 +170,13 @@ export class IPCHandlers {
             });
           });
 
-          await printClient.connect(
-            supabaseUrl,
-            supabaseKey,
-            config.stationToken
-          );
+          await printClient.connect(supabaseUrl, supabaseKey, stationToken);
 
           this.printClients.set(config.stationToken, printClient);
         } else {
           const existingClient = this.printClients.get(config.stationToken);
           const localStation = config.stations?.find(
-            (s) => s.token === config.stationToken
+            (s) => s.token === config.stationToken,
           );
           existingClient?.setStationDisplayName(localStation?.name || null);
         }
@@ -179,11 +189,12 @@ export class IPCHandlers {
 
     ipcMain.handle("connection:disconnect", () => {
       const config = this.configStore.get();
-      if (config.stationToken) {
-        const client = this.printClients.get(config.stationToken);
+      const stationToken = (config.stationToken || "").trim().toUpperCase();
+      if (stationToken) {
+        const client = this.printClients.get(stationToken);
         if (client) {
           client.disconnect();
-          this.printClients.delete(config.stationToken);
+          this.printClients.delete(stationToken);
         }
       }
       return { success: true };
@@ -191,8 +202,9 @@ export class IPCHandlers {
 
     ipcMain.handle("connection:getStatus", () => {
       const config = this.configStore.get();
-      if (config.stationToken) {
-        const client = this.printClients.get(config.stationToken);
+      const stationToken = (config.stationToken || "").trim().toUpperCase();
+      if (stationToken) {
+        const client = this.printClients.get(stationToken);
         if (client) {
           const station = client.getStation();
           return {
@@ -214,49 +226,21 @@ export class IPCHandlers {
         _event,
         limit: number = 50,
         startDate?: string,
-        endDate?: string
+        endDate?: string,
       ) => {
         try {
           // Busca jobs APENAS das estações CONECTADAS nesta sessão
+          // (via PrintClient, que usa RPC por token e evita RLS em print_jobs)
 
-          // Se não há estações conectadas, retorna vazio
           if (this.printClients.size === 0) {
             return { success: true, jobs: [] };
           }
 
-          // Inicializa supabase se necessário
-          if (!this.supabaseInitialized) {
-            const supabaseUrl = SUPABASE_URL;
-            const supabaseKey = SUPABASE_ANON_KEY;
-            if (supabaseUrl && supabaseKey) {
-              this.supabaseService.initialize(supabaseUrl, supabaseKey);
-              this.supabaseInitialized = true;
-            }
-          }
-
-          // Coleta IDs de todas as estações conectadas
-          const connectedStationIds: string[] = [];
-          this.printClients.forEach((client) => {
-            const station = client.getStation();
-            if (station) {
-              connectedStationIds.push(station.id);
-            }
-          });
-
-          // Se nenhuma estação realmente conectada, retorna vazio
-          if (connectedStationIds.length === 0) {
-            return { success: true, jobs: [] };
-          }
-
-          // Busca jobs de cada estação conectada e combina
           const allJobs = [];
-          for (const stationId of connectedStationIds) {
-            const jobs = await this.supabaseService.getRecentJobs(
-              stationId,
-              limit,
-              startDate,
-              endDate
-            );
+          for (const client of this.printClients.values()) {
+            const station = client.getStation();
+            if (!station) continue;
+            const jobs = await client.getRecentJobs(limit, startDate, endDate);
             allJobs.push(...jobs);
           }
 
@@ -265,7 +249,7 @@ export class IPCHandlers {
             .sort(
               (a, b) =>
                 new Date(b.created_at).getTime() -
-                new Date(a.created_at).getTime()
+                new Date(a.created_at).getTime(),
             )
             .slice(0, limit);
 
@@ -273,7 +257,7 @@ export class IPCHandlers {
         } catch (error: any) {
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     ipcMain.handle(
@@ -283,13 +267,13 @@ export class IPCHandlers {
           // Atualiza usando supabaseService
           await this.supabaseService.updateOrderStatus(
             jobId,
-            orderStatus as any
+            orderStatus as any,
           );
           return { success: true };
         } catch (error: any) {
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     ipcMain.handle(
@@ -299,6 +283,8 @@ export class IPCHandlers {
           console.log("[IPC] jobs:reprint chamado", { jobId });
           const config = this.configStore.get();
 
+          const stationToken = (config.stationToken || "").trim().toUpperCase();
+
           // Busca impressora configurada
           let printerName = config.selectedPrinter;
 
@@ -307,34 +293,137 @@ export class IPCHandlers {
             selectedPrinter: printerName,
           });
 
-          // Se não tem impressora na config, tenta buscar de printClient conectado
-          if (!printerName && config.stationToken) {
-            const printClient = this.printClients.get(config.stationToken);
-            if (printClient) {
-              const station = printClient.getStation();
-              printerName = station?.default_printer_name;
-              console.log(
-                "[IPC] Usando impressora da estação conectada:",
-                printerName
+          const availablePrinters = await this.printerService.listPrinters();
+          const normalizePrinterName = (name: string) =>
+            (name || "")
+              .trim()
+              .toLowerCase()
+              .normalize("NFKD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .replace(/\s+/g, " ");
+
+          const basePrinterName = (name: string) =>
+            normalizePrinterName(name)
+              .replace(/\((copiar|copy)\s*\d+\)$/i, "")
+              .replace(/\((copiar|copy)\s*\d+\)/i, "")
+              .replace(/\s+-\s+(copiar|copy)\s*\d+$/i, "")
+              .replace(/\s+(copiar|copy)\s*\d+$/i, "")
+              .trim();
+
+          const resolvePrinterName = (requestedName: string) => {
+            const target = normalizePrinterName(requestedName);
+            const targetBase = basePrinterName(requestedName);
+
+            const candidates = availablePrinters.map((p) => {
+              const n = normalizePrinterName(p.name);
+              const b = basePrinterName(p.name);
+
+              let score = 0;
+              if (n === target) score += 100;
+              if (b === targetBase) score += 90;
+              if (n.startsWith(target) || target.startsWith(n)) score += 70;
+              if (b.startsWith(targetBase) || targetBase.startsWith(b))
+                score += 65;
+              if (n.includes(target) || target.includes(n)) score += 55;
+              if (b.includes(targetBase) || targetBase.includes(b)) score += 50;
+
+              // Penaliza impressoras "virtuais" quando há uma física parecida
+              if (/(pdf|onenote|xps)/i.test(p.name)) score -= 10;
+
+              return { name: p.name, score };
+            });
+
+            candidates.sort((a, b) => b.score - a.score);
+            const best = candidates[0];
+            if (!best || best.score < 50) {
+              return null;
+            }
+            return best.name;
+          };
+
+          const triedCandidates: string[] = [];
+          const tryResolve = (candidate?: string, source?: string) => {
+            const c = (candidate || "").trim();
+            if (!c) return null;
+            triedCandidates.push(source ? `${source}: ${c}` : c);
+            const resolved = resolvePrinterName(c);
+            if (resolved) {
+              console.log("[IPC] Impressora resolvida:", {
+                source,
+                requested: c,
+                resolved,
+              });
+              return resolved;
+            }
+            return null;
+          };
+
+          // 1) Impressora salva na config local
+          printerName =
+            tryResolve(printerName, "config.selectedPrinter") || undefined;
+
+          // 2) Impressora da estação do token atual
+          if (!printerName && stationToken) {
+            const printClient = this.printClients.get(stationToken);
+            const station = printClient?.getStation();
+            printerName =
+              tryResolve(
+                station?.default_printer_name,
+                "station(token).default_printer_name",
+              ) || undefined;
+          }
+
+          // 3) Impressora de QUALQUER estação conectada nesta sessão
+          if (!printerName) {
+            for (const [token, client] of this.printClients.entries()) {
+              const station = client.getStation();
+              const resolved = tryResolve(
+                station?.default_printer_name,
+                `station(connected:${token}).default_printer_name`,
               );
+              if (resolved) {
+                printerName = resolved;
+                break;
+              }
             }
           }
 
-          // Se ainda não tem impressora, usa a padrão do sistema
+          // 4) Impressoras salvas na lista de estações do config (quando existir)
+          if (!printerName && Array.isArray((config as any).stations)) {
+            for (const s of (config as any).stations) {
+              const resolved = tryResolve(
+                s?.printer,
+                "config.stations[].printer",
+              );
+              if (resolved) {
+                printerName = resolved;
+                break;
+              }
+            }
+          }
+
+          // 5) Fallback seguro: apenas se existir exatamente 1 impressora física
           if (!printerName) {
-            const defaultPrinter =
-              await this.printerService.getDefaultPrinter();
-            printerName = defaultPrinter || undefined;
-            console.log(
-              "[IPC] Usando impressora padrão do sistema:",
-              printerName
-            );
+            const physical = availablePrinters
+              .map((p) => p.name)
+              .filter((n) => !/(pdf|onenote|xps)/i.test(n));
+            if (physical.length === 1) {
+              printerName = physical[0];
+              console.warn(
+                "[IPC] Fallback: única impressora física detectada:",
+                printerName,
+              );
+            }
           }
 
           if (!printerName) {
             console.error("[IPC] ❌ Nenhuma impressora disponível!");
             throw new Error(
-              "Nenhuma impressora configurada. Configure uma impressora antes de reimprimir."
+              `Impressora não encontrada. Configure uma impressora válida. Tentativas: ${triedCandidates.join(
+                " | ",
+              )}. Disponíveis: ${availablePrinters
+                .map((p) => p.name)
+                .join(", ")}`,
             );
           }
 
@@ -347,11 +436,11 @@ export class IPCHandlers {
           if (localStation?.name) {
             payload = payload.replace(
               /^ESTAÇÃO\s*:\s*.*$/gim,
-              `ESTAÇÃO: ${localStation.name}`
+              `ESTAÇÃO: ${localStation.name}`,
             );
             payload = payload.replace(
               /^ESTAÇAO\s*:\s*.*$/gim,
-              `ESTACAO: ${localStation.name}`
+              `ESTACAO: ${localStation.name}`,
             );
           }
 
@@ -359,7 +448,7 @@ export class IPCHandlers {
           await this.printerService.print(printerName, payload);
 
           this.logService.success(
-            `Job ${jobId.substring(0, 8)} reimpresso com sucesso`
+            `Job ${jobId.substring(0, 8)} reimpresso com sucesso`,
           );
           console.log("[IPC] ✓ Reimpressão concluída");
 
@@ -369,7 +458,7 @@ export class IPCHandlers {
           this.logService.error(`Erro ao reimprimir: ${error.message}`);
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     ipcMain.handle(
@@ -388,7 +477,7 @@ export class IPCHandlers {
         } catch (error: any) {
           throw new Error(error.message);
         }
-      }
+      },
     );
 
     ipcMain.handle("station:updateName", async (_event, name: string) => {

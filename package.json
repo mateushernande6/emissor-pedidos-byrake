@@ -1,6 +1,6 @@
 {
   "name": "emissor-de-pedidos-byrake",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Cliente de impressão para sistema de bar Byrake integrado ao supabase",
   "main": "dist/main/main.js",
   "author": "Codem Solutions",

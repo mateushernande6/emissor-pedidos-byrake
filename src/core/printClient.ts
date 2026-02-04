@@ -19,7 +19,7 @@ export class PrintClient {
   constructor(
     supabase: SupabaseService,
     printer: PrinterService,
-    logger: LogService
+    logger: LogService,
   ) {
     this.supabase = supabase;
     this.printer = printer;
@@ -32,10 +32,11 @@ export class PrintClient {
   async connect(url: string, key: string, token: string): Promise<void> {
     try {
       this.logger.info("Conectando ao Supabase...");
-      this.supabase.initialize(url, key);
+      const stationToken = (token || "").trim().toUpperCase();
+      this.supabase.initialize(url, key, stationToken);
 
       this.logger.info("Buscando estação por token...");
-      const station = await this.supabase.getStationByToken(token);
+      const station = await this.supabase.getStationByToken(stationToken);
 
       if (!station) {
         this.notifyStatus({
@@ -115,7 +116,7 @@ export class PrintClient {
     // Se não há filtro local, processa tudo
     if (this.localCategories.length === 0) {
       this.logger.info(
-        `[FILTRO] Sem filtro local - ACEITA job ${job.id.substring(0, 8)}`
+        `[FILTRO] Sem filtro local - ACEITA job ${job.id.substring(0, 8)}`,
       );
       return true;
     }
@@ -123,7 +124,7 @@ export class PrintClient {
     // Se o filtro contém "Todas", processa tudo
     if (this.localCategories.includes("Todas")) {
       this.logger.info(
-        `[FILTRO] Categoria "Todas" - ACEITA job ${job.id.substring(0, 8)}`
+        `[FILTRO] Categoria "Todas" - ACEITA job ${job.id.substring(0, 8)}`,
       );
       return true;
     }
@@ -132,29 +133,29 @@ export class PrintClient {
     const jobCategories = job.item_categories || [];
     if (jobCategories.length === 0) {
       this.logger.info(
-        `[FILTRO] Job sem categorias - ACEITA ${job.id.substring(0, 8)}`
+        `[FILTRO] Job sem categorias - ACEITA ${job.id.substring(0, 8)}`,
       );
       return true;
     }
 
     // Verifica se há interseção entre categorias do job e filtro local
     const shouldProcess = jobCategories.some((cat) =>
-      this.localCategories.includes(cat)
+      this.localCategories.includes(cat),
     );
 
     if (shouldProcess) {
       this.logger.info(
-        `[FILTRO] Match encontrado - ACEITA job ${job.id.substring(0, 8)}`
+        `[FILTRO] Match encontrado - ACEITA job ${job.id.substring(0, 8)}`,
       );
     } else {
       this.logger.info(
-        `[FILTRO] Sem match - REJEITA job ${job.id.substring(0, 8)}`
+        `[FILTRO] Sem match - REJEITA job ${job.id.substring(0, 8)}`,
       );
       this.logger.info(
-        `[FILTRO] Job categorias: [${jobCategories.join(", ")}]`
+        `[FILTRO] Job categorias: [${jobCategories.join(", ")}]`,
       );
       this.logger.info(
-        `[FILTRO] Filtro local: [${this.localCategories.join(", ")}]`
+        `[FILTRO] Filtro local: [${this.localCategories.join(", ")}]`,
       );
     }
 
@@ -169,7 +170,7 @@ export class PrintClient {
 
     try {
       this.logger.info("Buscando jobs pendentes...");
-      const allJobs = await this.supabase.getPendingJobs(this.station.id);
+      const allJobs = await this.supabase.getPendingJobs();
 
       // Aplica filtro local de categorias
       const jobs = allJobs.filter((job) => this.shouldProcessJob(job));
@@ -182,7 +183,7 @@ export class PrintClient {
       this.logger.info(
         `${jobs.length} job(s) pendente(s) encontrado(s) (${
           allJobs.length - jobs.length
-        } filtrado(s))`
+        } filtrado(s))`,
       );
 
       // Adiciona à fila
@@ -208,19 +209,19 @@ export class PrintClient {
         // Aplica filtro local antes de adicionar à fila
         if (this.shouldProcessJob(job)) {
           this.logger.info(
-            `🔔 Novo job recebido via Realtime: ${job.id.substring(0, 8)}`
+            `🔔 Novo job recebido via Realtime: ${job.id.substring(0, 8)}`,
           );
           this.processingQueue.push(job);
           this.logger.info(
-            `Adicionado à fila. Total na fila: ${this.processingQueue.length}`
+            `Adicionado à fila. Total na fila: ${this.processingQueue.length}`,
           );
           this.processQueue();
         } else {
           this.logger.info(
-            `Job ${job.id.substring(0, 8)} ignorado (filtro local)`
+            `Job ${job.id.substring(0, 8)} ignorado (filtro local)`,
           );
         }
-      }
+      },
     );
 
     // Polling como fallback (verifica novos jobs a cada 3 segundos)
@@ -248,11 +249,11 @@ export class PrintClient {
       if (!this.station) return;
 
       try {
-        const allJobs = await this.supabase.getPendingJobs(this.station.id);
+        const allJobs = await this.supabase.getPendingJobs();
 
         // Aplica filtro local de categorias
         const filteredJobs = allJobs.filter((job) =>
-          this.shouldProcessJob(job)
+          this.shouldProcessJob(job),
         );
 
         // Filtra apenas jobs que não foram processados ainda
@@ -269,22 +270,22 @@ export class PrintClient {
 
         if (newJobs.length > 0) {
           this.logger.info(
-            `🔍 ${newJobs.length} novo(s) job(s) encontrado(s) via polling`
+            `🔍 ${newJobs.length} novo(s) job(s) encontrado(s) via polling`,
           );
 
           newJobs.forEach((job) => {
             // Evita duplicatas verificando se já está na fila
             const alreadyInQueue = this.processingQueue.some(
-              (qJob) => qJob.id === job.id
+              (qJob) => qJob.id === job.id,
             );
             if (!alreadyInQueue) {
               this.logger.info(
-                `Adicionando job ${job.id.substring(0, 8)} à fila`
+                `Adicionando job ${job.id.substring(0, 8)} à fila`,
               );
               this.processingQueue.push(job);
             } else {
               this.logger.info(
-                `Job ${job.id.substring(0, 8)} já está na fila, ignorando`
+                `Job ${job.id.substring(0, 8)} já está na fila, ignorando`,
               );
             }
           });
@@ -315,7 +316,7 @@ export class PrintClient {
   private async processQueue(): Promise<void> {
     if (this.isProcessing) {
       this.logger.info(
-        "Fila de impressão já está sendo processada, aguardando..."
+        "Fila de impressão já está sendo processada, aguardando...",
       );
       return;
     }
@@ -325,7 +326,7 @@ export class PrintClient {
     }
 
     this.logger.info(
-      `Iniciando processamento da fila (${this.processingQueue.length} job(s) pendente(s))`
+      `Iniciando processamento da fila (${this.processingQueue.length} job(s) pendente(s))`,
     );
     this.isProcessing = true;
 
@@ -348,7 +349,7 @@ export class PrintClient {
       this.logger.info(
         `➡️ Processando job ${job.id.substring(0, 8)}... (Estação: ${
           this.station?.name
-        })`
+        })`,
       );
 
       // Atualiza status para "printing"
@@ -365,7 +366,7 @@ export class PrintClient {
 
       // Envia para impressão
       this.logger.info(
-        `🖨️ Enviando para impressão (${job.payload.length} caracteres)...`
+        `🖨️ Enviando para impressão (${job.payload.length} caracteres)...`,
       );
       const payloadToPrint = this.applyStationNameOverride(job.payload);
       await this.printer.print(printerName, payloadToPrint);
@@ -375,18 +376,18 @@ export class PrintClient {
       await this.supabase.updateJobToPrinted(job.id);
 
       this.logger.success(
-        `✅ Job ${job.id.substring(0, 8)} impresso com sucesso!`
+        `✅ Job ${job.id.substring(0, 8)} impresso com sucesso!`,
       );
     } catch (error: any) {
       this.logger.error(
-        `❌ Erro ao processar job ${job.id.substring(0, 8)}: ${error.message}`
+        `❌ Erro ao processar job ${job.id.substring(0, 8)}: ${error.message}`,
       );
 
       try {
         await this.supabase.updateJobToError(job.id, error.message);
       } catch (updateError: any) {
         this.logger.error(
-          `Erro ao atualizar status de erro: ${updateError.message}`
+          `Erro ao atualizar status de erro: ${updateError.message}`,
         );
       }
     }
@@ -428,19 +429,13 @@ export class PrintClient {
   async getRecentJobs(
     limit: number = 50,
     startDate?: string,
-    endDate?: string
+    endDate?: string,
   ): Promise<PrintJob[]> {
     if (!this.station) {
       return [];
     }
 
-    // Busca jobs apenas desta estação
-    return await this.supabase.getRecentJobs(
-      this.station.id,
-      limit,
-      startDate,
-      endDate
-    );
+    return await this.supabase.getRecentJobsByToken(limit, startDate, endDate);
   }
 
   /**
@@ -448,7 +443,7 @@ export class PrintClient {
    */
   async updateJobOrderStatus(
     jobId: string,
-    orderStatus: "recebido" | "em_preparo" | "pronto" | "entregue"
+    orderStatus: "recebido" | "em_preparo" | "pronto" | "entregue",
   ): Promise<void> {
     await this.supabase.updateOrderStatus(jobId, orderStatus);
     this.logger.info(`Status do pedido atualizado: ${orderStatus}`);
@@ -485,7 +480,7 @@ export class PrintClient {
         categories.length > 0
           ? categories.join(", ")
           : "Nenhum (todos os itens)"
-      }`
+      }`,
     );
   }
 
@@ -595,7 +590,7 @@ export class PrintClient {
         categories.length > 0
           ? categories.join(", ")
           : "Nenhum (todos os itens)"
-      }`
+      }`,
     );
   }
 }

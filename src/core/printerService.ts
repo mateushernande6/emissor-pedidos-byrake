@@ -23,19 +23,150 @@ export class PrinterService {
     }
   }
 
+<<<<<<< HEAD
   private sanitizeForRawPrinter(content: string): string {
     const withoutDiacritics = content
+=======
+  private sanitizeTextContent(content: string): string {
+    const normalized = content
+      .replace(/[\u2010-\u2015]/g, "-")
+      .replace(/\u2026/g, "...")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\u00BA/g, "o")
+      .replace(/\u00AA/g, "a")
+      .replace(/\u00A0/g, " ");
+
+    const withoutDiacritics = normalized
+>>>>>>> 46b5bdd (fix: fixed print)
       .normalize("NFKD")
       .replace(/[\u0300-\u036f]/g, "");
 
-    const sanitized = withoutDiacritics.replace(
-      /[^\x09\x0A\x0D\x1B\x1D\x20-\x7E]/g,
-      ""
-    );
+    return withoutDiacritics.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+  }
 
+<<<<<<< HEAD
     const feedLines = "\n\n\n\n\n\n\n\n";
     const cutCommand = "\x1D\x56\x01";
     return sanitized + feedLines + cutCommand;
+=======
+  private wrapLines(content: string, maxCharsPerLine: number): string[] {
+    const lines = content.split("\n");
+    const wrapped: string[] = [];
+
+    for (const line of lines) {
+      if (line.length <= maxCharsPerLine) {
+        wrapped.push(line);
+        continue;
+      }
+
+      let rest = line;
+      while (rest.length > maxCharsPerLine) {
+        let cut = rest.lastIndexOf(" ", maxCharsPerLine);
+        if (cut < 10) {
+          cut = maxCharsPerLine;
+        }
+        wrapped.push(rest.slice(0, cut));
+        rest = rest.slice(cut).trimStart();
+      }
+      if (rest.length > 0) {
+        wrapped.push(rest);
+      }
+    }
+
+    return wrapped;
+  }
+
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  private classifyLine(line: string): "title" | "separator" | "content" {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return "content";
+    }
+
+    const isSeparator = /^[-_=*#]{6,}$/.test(trimmed);
+    if (isSeparator) {
+      return "separator";
+    }
+
+    const upper = trimmed.toUpperCase();
+    const titleKeywords = [
+      "BYRAKE",
+      "TESTE DE IMPRESSAO",
+      "PEDIDO",
+      "COMANDA",
+      "TOTAL",
+      "ESTACAO",
+      "ITENS",
+    ];
+
+    if (
+      titleKeywords.some((k) => upper.startsWith(k)) ||
+      (upper === trimmed && trimmed.length >= 6 && trimmed.length <= 32)
+    ) {
+      return "title";
+    }
+
+    return "content";
+  }
+
+  private buildBrowserHtml(content: string): string {
+    const sanitized = this.sanitizeTextContent(content);
+
+    // Adiciona linhas em branco no final para facilitar o corte manual
+    const feedLines = "\n\n\n\n\n\n\n\n";
+    const withFeed = sanitized + feedLines;
+
+    // Força um limite mais conservador para nunca vazar em 58mm
+    const wrappedLines = this.wrapLines(withFeed, 38);
+    const linesHtml = wrappedLines
+      .map((line) => {
+        const cls = this.classifyLine(line);
+        return `<div class="line ${cls}">${this.escapeHtml(line)}</div>`;
+      })
+      .join("");
+
+    return `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              @page {
+                margin: 2mm;
+              }
+              body {
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                font-weight: 600;
+                color: #000;
+                margin: 0;
+                padding: 0;
+              }
+              .line {
+                white-space: pre;
+                line-height: 1.1;
+                word-break: break-word;
+                overflow-wrap: anywhere;
+              }
+              .line.title {
+                font-weight: 900;
+              }
+              .line.separator {
+                font-weight: 700;
+              }
+            </style>
+          </head>
+          <body>${linesHtml}</body>
+          </html>
+        `;
+>>>>>>> 46b5bdd (fix: fixed print)
   }
 
   private sanitizeForBrowserPrint(content: string): string {
@@ -66,6 +197,7 @@ export class PrinterService {
    * Envia um texto simples para impressão usando Electron API
    */
   async print(printerName: string, content: string): Promise<void> {
+<<<<<<< HEAD
     if (process.platform === "win32") {
       const browserContent = this.sanitizeForBrowserPrint(content);
       try {
@@ -166,6 +298,19 @@ export class PrinterService {
         }
       });
     });
+=======
+    if (process.platform === "win32" || process.platform === "darwin") {
+      const html = this.buildBrowserHtml(content);
+      return this.printWithBrowserWindow(printerName, html);
+    }
+
+    // Linux: mantém caminho raw (quando suportado)
+    const feedLines = "\n\n\n\n\n\n\n\n";
+    const cutCommand = "\x1D\x56\x01";
+    const sanitizedContent =
+      this.sanitizeTextContent(content) + feedLines + cutCommand;
+    return this.printWithLp(printerName, sanitizedContent);
+>>>>>>> 46b5bdd (fix: fixed print)
   }
 
   private printWithLp(printerName: string, content: string): Promise<void> {
@@ -179,7 +324,9 @@ export class PrinterService {
       lp.stdin.write(normalizedContent, (err) => {
         if (err) {
           reject(
-            new Error(`Falha ao enviar dados para a impressora: ${err.message}`)
+            new Error(
+              `Falha ao enviar dados para a impressora: ${err.message}`,
+            ),
           );
         }
         lp.stdin.end();
@@ -191,7 +338,7 @@ export class PrinterService {
 
       lp.on("error", (error) => {
         reject(
-          new Error(`Erro ao executar comando de impressão: ${error.message}`)
+          new Error(`Erro ao executar comando de impressão: ${error.message}`),
         );
       });
 
@@ -204,8 +351,8 @@ export class PrinterService {
             new Error(
               `Falha ao imprimir (código ${code}): ${
                 stderr.trim() || "Erro desconhecido"
-              }`
-            )
+              }`,
+            ),
           );
         }
       });
@@ -214,22 +361,30 @@ export class PrinterService {
 
   private printWithBrowserWindow(
     printerName: string,
-    content: string
+    content: string,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       let isPrinting = false;
       let printWindow: BrowserWindow | null = null;
       let finished = false;
 
+      console.log(`[WINDOWS-PRINT] Iniciando impressão para: ${printerName}`);
+
       try {
+        // IMPORTANTE: No Windows, criar janela com webSecurity desabilitada
+        // para evitar problemas com o pipeline de impressão
         printWindow = new BrowserWindow({
           show: false,
+          width: 800,
+          height: 600,
           webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
+            webSecurity: false, // Permite impressão sem restrições
           },
         });
 
+<<<<<<< HEAD
         const htmlContent = `
           <!DOCTYPE html>
           <html>
@@ -258,6 +413,11 @@ export class PrinterService {
             .replace(/>/g, "&gt;")}</pre></body>
           </html>
         `;
+=======
+        console.log("[WINDOWS-PRINT] BrowserWindow criada");
+
+        const htmlContent = content;
+>>>>>>> 46b5bdd (fix: fixed print)
 
         const finalize = (error?: Error) => {
           if (finished) {
@@ -287,54 +447,104 @@ export class PrinterService {
 
           // CRÍTICO: No Windows, aguardar 500ms antes de imprimir
           // para garantir que o renderizador esteja completamente pronto
-          setTimeout(() => {
+          console.log(
+            "[WINDOWS-PRINT] Conteúdo carregado, aguardando 500ms...",
+          );
+
+          setTimeout(async () => {
             if (isPrinting || !printWindow || printWindow.isDestroyed()) {
+              console.log(
+                "[WINDOWS-PRINT] CANCELADO: janela destruída ou já imprimindo",
+              );
               return;
             }
 
             isPrinting = true;
             clearTimeout(timeoutId);
 
+            // Verificar se a impressora existe antes de imprimir
+            const printers = await printWindow.webContents.getPrintersAsync();
+            const printerExists = printers.some((p) => p.name === printerName);
+
+            console.log(
+              `[WINDOWS-PRINT] Impressoras disponíveis: ${printers
+                .map((p) => p.name)
+                .join(", ")}`,
+            );
+            console.log(
+              `[WINDOWS-PRINT] Impressora alvo: "${printerName}" - Existe: ${printerExists}`,
+            );
+
+            if (!printerExists) {
+              console.error(
+                `[WINDOWS-PRINT] ❌ IMPRESSORA NÃO ENCONTRADA: ${printerName}`,
+              );
+              finalize(
+                new Error(
+                  `Impressora "${printerName}" não encontrada no sistema`,
+                ),
+              );
+              return;
+            }
+
+            console.log(
+              `[WINDOWS-PRINT] 🖨️ Enviando para impressora: ${printerName}`,
+            );
+            console.log(
+              `[WINDOWS-PRINT] Parâmetros: silent=true, deviceName="${printerName}"`,
+            );
+
             printWindow.webContents.print(
               {
                 silent: true,
-                printBackground: false,
+                printBackground: true, // Mudado para true
                 deviceName: printerName,
                 margins: {
-                  marginType: "custom",
-                  top: 10,
-                  bottom: 10,
-                  left: 10,
-                  right: 10,
+                  marginType: "default", // Mudado para default
                 },
               },
               (success, errorType) => {
+                console.log(
+                  `[WINDOWS-PRINT] Callback recebido: success=${success}, errorType=${errorType}`,
+                );
+
                 if (!success) {
-                  console.error("Erro ao imprimir:", errorType);
+                  console.error(
+                    "[WINDOWS-PRINT] ❌ Erro ao imprimir:",
+                    errorType,
+                  );
                   finalize(
                     new Error(
-                      `Falha ao imprimir: ${errorType || "Erro desconhecido"}`
-                    )
+                      `Falha ao imprimir: ${errorType || "Erro desconhecido"}`,
+                    ),
                   );
                   return;
                 }
 
                 console.log(
-                  `Impressão enviada com sucesso para ${printerName}`
+                  `[WINDOWS-PRINT] ✓ Callback retornou SUCCESS para ${printerName}`,
                 );
 
                 // CRÍTICO: No Windows, o callback retorna ANTES que o job
                 // seja realmente processado pela fila da impressora.
-                // Manter a janela aberta por 2 segundos para garantir que
+                // Manter a janela aberta por 5 SEGUNDOS para garantir que
                 // o Windows processe completamente o job de impressão.
+                //
+                // Alguns drivers de impressora (como ELGIN) precisam de mais
+                // tempo para processar o job corretamente.
                 console.log(
-                  "[PRINT] Aguardando 2s para Windows processar job..."
+                  "[WINDOWS-PRINT] ⏳ Aguardando 5 SEGUNDOS para Windows processar job...",
                 );
+                console.log("[WINDOWS-PRINT] (NÃO feche a janela, aguarde...)");
+
                 setTimeout(() => {
-                  console.log("[PRINT] Delay concluído, finalizando.");
+                  console.log("[WINDOWS-PRINT] ✓ Delay de 5s concluído!");
+                  console.log(
+                    "[WINDOWS-PRINT] Finalizando e fechando janela...",
+                  );
                   finalize();
-                }, 2000); // 2 segundos críticos para Windows processar
-              }
+                }, 5000); // 5 SEGUNDOS - tempo extra para drivers lentos como ELGIN
+              },
             );
           }, 500); // 500ms de delay crítico para Windows
         });
@@ -344,7 +554,7 @@ export class PrinterService {
         });
 
         printWindow.loadURL(
-          `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`
+          `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`,
         );
       } catch (error: any) {
         if (!finished) {
@@ -363,9 +573,9 @@ export class PrinterService {
    */
   async testPrint(printerName: string, stationName: string): Promise<void> {
     const testContent = `
-========================================
+======================================
         TESTE DE IMPRESSÃO
-========================================
+======================================
 
 Estação: ${stationName}
 Data/Hora: ${new Date().toLocaleString("pt-BR")}
@@ -377,7 +587,7 @@ Emissor de pedidos ByRake.
 Se você está lendo isto, a impressão
 está funcionando corretamente!
 
-========================================
+======================================
 
 
 

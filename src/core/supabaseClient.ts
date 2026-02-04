@@ -8,12 +8,20 @@ import { PrintStation, PrintJob } from "./types";
 export class SupabaseService {
   private client: SupabaseClient | null = null;
   private channel: RealtimeChannel | null = null;
+  private stationToken: string | null = null;
 
   /**
    * Inicializa o cliente Supabase
    */
-  initialize(url: string, key: string): void {
+  initialize(url: string, key: string, stationToken?: string): void {
     this.client = createClient(url, key);
+    if (typeof stationToken === "string") {
+      this.stationToken = stationToken;
+    }
+  }
+
+  setStationToken(stationToken: string): void {
+    this.stationToken = stationToken;
   }
 
   /**
@@ -31,18 +39,15 @@ export class SupabaseService {
       throw new Error("Cliente Supabase não inicializado");
     }
 
-    const { data, error } = await this.client
-      .from("print_stations")
-      .select("*")
-      .eq("token", token)
-      .single();
+    const { data, error } = await this.client.rpc(
+      "get_print_station_by_token",
+      {
+        p_token: token,
+      },
+    );
 
     if (error) {
-      if (error.code === "PGRST116") {
-        // Nenhum registro encontrado
-        return null;
-      }
-      throw new Error(`Erro ao buscar estação: ${error.message}`);
+      return null;
     }
 
     return data as PrintStation;
@@ -56,10 +61,16 @@ export class SupabaseService {
       throw new Error("Cliente Supabase não inicializado");
     }
 
-    const { error } = await this.client
-      .from("print_stations")
-      .update({ last_seen_at: new Date().toISOString() })
-      .eq("id", stationId);
+    if (!this.stationToken) {
+      throw new Error("Token da estação não definido");
+    }
+
+    const { error } = await this.client.rpc(
+      "touch_print_station_last_seen_by_token",
+      {
+        p_token: this.stationToken,
+      },
+    );
 
     if (error) {
       throw new Error(`Erro ao atualizar last_seen: ${error.message}`);
@@ -71,16 +82,23 @@ export class SupabaseService {
    */
   async updateDefaultPrinter(
     stationId: string,
-    printerName: string
+    printerName: string,
   ): Promise<void> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
     }
 
-    const { error } = await this.client
-      .from("print_stations")
-      .update({ default_printer_name: printerName })
-      .eq("id", stationId);
+    if (!this.stationToken) {
+      throw new Error("Token da estação não definido");
+    }
+
+    const { error } = await this.client.rpc(
+      "update_print_station_default_printer_by_token",
+      {
+        p_token: this.stationToken,
+        p_default_printer_name: printerName,
+      },
+    );
 
     if (error) {
       throw new Error(`Erro ao atualizar impressora padrão: ${error.message}`);
@@ -91,120 +109,75 @@ export class SupabaseService {
    * Busca jobs pendentes de uma estação (filtrados por categoria quando aplicável)
    * RETROCOMPATÍVEL: Jobs sem categoria imprimem em todas as estações
    */
-  async getPendingJobs(stationId: string): Promise<PrintJob[]> {
+  async getPendingJobs(): Promise<PrintJob[]> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
     }
 
-    // Primeiro busca a estação para pegar suas categorias
-    const { data: station, error: stationError } = await this.client
-      .from("print_stations")
-      .select("categories")
-      .eq("id", stationId)
-      .single();
-
-    if (stationError) {
-      throw new Error(`Erro ao buscar estação: ${stationError.message}`);
+    if (!this.stationToken) {
+      throw new Error("Token da estação não definido");
     }
 
-    // Busca todos os jobs pendentes da estação
-    const { data, error } = await this.client
-      .from("print_jobs")
-      .select("*")
-      .eq("station_id", stationId)
-      .eq("status", "pending")
-      .order("created_at", { ascending: true });
+    const { data, error } = await this.client.rpc(
+      "get_pending_print_jobs_by_token",
+      {
+        p_token: this.stationToken,
+      },
+    );
 
     if (error) {
       throw new Error(`Erro ao buscar jobs pendentes: ${error.message}`);
     }
 
-    const allJobs = (data as PrintJob[]) || [];
-
-    // Filtra jobs baseado nas categorias da estação
-    const stationCategories = station?.categories || [];
-
-    // RETROCOMPATIBILIDADE: Se a estação não tem categorias, retorna todos (comportamento antigo)
-    if (!stationCategories || stationCategories.length === 0) {
-      return allJobs;
-    }
-
-    // Aplica filtro de categorias
-    const filteredJobs = allJobs.filter((job: any) => {
-      const jobCategories = job.item_categories || [];
-
-      // RETROCOMPATIBILIDADE: Jobs SEM categoria imprimem em TODAS as estações
-      // Isso mantém o comportamento antigo do sistema funcionando
-      if (!jobCategories || jobCategories.length === 0) {
-        return true; // Imprime (comportamento antigo)
-      }
-
-      // Jobs COM categoria: verifica se há interseção com as categorias da estação
-      return stationCategories.some((cat: string) =>
-        jobCategories.includes(cat)
-      );
-    });
-
-    return filteredJobs;
+    return ((data as PrintJob[]) || []) as PrintJob[];
   }
 
   /**
    * Atualiza o status de um job para "printing"
    */
   async updateJobToPrinting(jobId: string): Promise<void> {
-    if (!this.client) {
-      throw new Error("Cliente Supabase não inicializado");
-    }
-
-    const { error } = await this.client
-      .from("print_jobs")
-      .update({ status: "printing" })
-      .eq("id", jobId);
-
-    if (error) {
-      throw new Error(`Erro ao atualizar job para printing: ${error.message}`);
-    }
+    await this.updateJobStatus(jobId, "printing");
   }
 
   /**
    * Atualiza o status de um job para "printed"
    */
   async updateJobToPrinted(jobId: string): Promise<void> {
-    if (!this.client) {
-      throw new Error("Cliente Supabase não inicializado");
-    }
-
-    const { error } = await this.client
-      .from("print_jobs")
-      .update({
-        status: "printed",
-        printed_at: new Date().toISOString(),
-      })
-      .eq("id", jobId);
-
-    if (error) {
-      throw new Error(`Erro ao atualizar job para printed: ${error.message}`);
-    }
+    await this.updateJobStatus(jobId, "printed");
   }
 
   /**
    * Atualiza o status de um job para "error"
    */
   async updateJobToError(jobId: string, errorMessage: string): Promise<void> {
+    await this.updateJobStatus(jobId, "error", errorMessage);
+  }
+
+  private async updateJobStatus(
+    jobId: string,
+    status: string,
+    errorMessage?: string,
+  ): Promise<void> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
     }
 
-    const { error } = await this.client
-      .from("print_jobs")
-      .update({
-        status: "error",
-        error_message: errorMessage,
-      })
-      .eq("id", jobId);
+    if (!this.stationToken) {
+      throw new Error("Token da estação não definido");
+    }
+
+    const { error } = await this.client.rpc(
+      "update_print_job_status_by_token",
+      {
+        p_token: this.stationToken,
+        p_job_id: jobId,
+        p_status: status,
+        p_error_message: errorMessage || null,
+      },
+    );
 
     if (error) {
-      throw new Error(`Erro ao atualizar job para error: ${error.message}`);
+      throw new Error(`Erro ao atualizar status do job: ${error.message}`);
     }
   }
 
@@ -216,7 +189,7 @@ export class SupabaseService {
     stationId?: string, // Opcional agora
     limit: number = 50,
     startDate?: string, // Data inicial (ISO)
-    endDate?: string // Data final (ISO)
+    endDate?: string, // Data final (ISO)
   ): Promise<PrintJob[]> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
@@ -232,7 +205,7 @@ export class SupabaseService {
           name,
           token
         )
-      `
+      `,
       )
       .in("status", ["printed", "cancelled"]); // Inclui impressos e cancelados
 
@@ -260,12 +233,42 @@ export class SupabaseService {
     return (data as PrintJob[]) || [];
   }
 
+  async getRecentJobsByToken(
+    limit: number = 50,
+    startDate?: string,
+    endDate?: string,
+  ): Promise<PrintJob[]> {
+    if (!this.client) {
+      throw new Error("Cliente Supabase não inicializado");
+    }
+
+    if (!this.stationToken) {
+      throw new Error("Token da estação não definido");
+    }
+
+    const { data, error } = await this.client.rpc(
+      "get_recent_print_jobs_by_token",
+      {
+        p_token: this.stationToken,
+        p_limit: limit,
+        p_start: startDate || null,
+        p_end: endDate || null,
+      },
+    );
+
+    if (error) {
+      throw new Error(`Erro ao buscar jobs recentes: ${error.message}`);
+    }
+
+    return ((data as PrintJob[]) || []) as PrintJob[];
+  }
+
   /**
    * Atualiza o status do pedido (order_status)
    */
   async updateOrderStatus(
     jobId: string,
-    orderStatus: "recebido" | "em_preparo" | "pronto" | "entregue"
+    orderStatus: "recebido" | "em_preparo" | "pronto" | "entregue",
   ): Promise<void> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
@@ -286,7 +289,7 @@ export class SupabaseService {
    */
   subscribeToJobs(
     stationId: string,
-    onInsert: (job: PrintJob) => void
+    onInsert: (job: PrintJob) => void,
   ): () => void {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
@@ -316,7 +319,7 @@ export class SupabaseService {
           if (job.station_id === stationId) {
             onInsert(job);
           }
-        }
+        },
       )
       .subscribe((status, err) => {
         console.log("[DEBUG] Realtime subscription status:", status);
@@ -339,7 +342,7 @@ export class SupabaseService {
    */
   async updateStationCategories(
     stationToken: string,
-    categories: string[]
+    categories: string[],
   ): Promise<void> {
     if (!this.client) {
       throw new Error("Cliente Supabase não inicializado");
